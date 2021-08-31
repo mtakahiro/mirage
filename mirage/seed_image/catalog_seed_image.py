@@ -2242,6 +2242,16 @@ class Catalog_seed():
         else:
             signalimage = np.zeros(self.output_dims, dtype=np.float)
             segmentation_map = np.zeros(self.output_dims)
+            print('TM')
+            new_hdul = fits.HDUList()
+            new_hdul.append(fits.PrimaryHDU())
+            filename_seg_multi = 'test.fits'
+            new_hdul.writeto(filename_seg_multi, overwrite=True)
+            new_hdul_dir = fits.HDUList()
+            new_hdul_dir.append(fits.PrimaryHDU())
+            filename_dir_multi = 'test_dir.fits'
+            new_hdul_dir.writeto(filename_dir_multi, overwrite=True)
+            
 
 
         instrument_name = self.params['Inst']['instrument'].lower()
@@ -2270,7 +2280,9 @@ class Catalog_seed():
                 pslist, ps_ghosts_cat = self.get_point_source_list(self.params['simSignals']['pointsource'],
                                                                    segment_offset=offset_vector)
 
-                psfimage, ptsrc_segmap = self.make_point_source_image(pslist)
+                # TM
+                #psfimage, ptsrc_segmap = self.make_point_source_image(pslist)
+                psfimage, ptsrc_segmap = self.make_point_source_image_multidim(pslist,filename_dir_multi,filename_seg_multi)
 
                 # If ghost sources are present, then make sure Mirage will retrieve
                 # sources from an extended source catalog
@@ -3043,6 +3055,145 @@ class Catalog_seed():
 
                 # Add source to segmentation map
                 ptsrc_segmap.add_object_threshold(psf_to_add, j1, i1, entry['index'], self.segmentation_threshold)
+            except IndexError:
+                # In here we catch sources that are off the edge
+                # of the detector. These may not necessarily be caught in
+                # getpointsourcelist because if the PSF is not centered
+                # in the webbpsf stamp, then the area to be pulled from
+                # the stamp may shift off of the detector.
+                pass
+
+            # Stop timer
+            self.timer.stop(name='ptsrc_{}'.format(str(i).zfill(6)))
+
+            # If there are more than 100 point sources, provide an estimate of processing time
+            if len(pointSources) > 100:
+                if ((i == 20) or ((i > 0) and (np.mod(i, 100) == 0))):
+                    time_per_ptsrc = self.timer.sum(key_str='ptsrc_') / (i+1)
+                    estimated_remaining_time = time_per_ptsrc * (len(pointSources) - (i+1)) * u.second
+                    time_remaining = np.around(estimated_remaining_time.to(u.minute).value, decimals=2)
+                    finish_time = datetime.datetime.now() + datetime.timedelta(minutes=time_remaining)
+                    self.logger.info(('Working on source #{}. Estimated time remaining to add all point sources to the stamp image: {} minutes. '
+                                      'Projected finish time: {}'.format(i, time_remaining, finish_time)))
+
+        return psfimage, ptsrc_segmap
+
+    def make_point_source_image_multidim(self, pointSources, dir_multi, seg_multi, segment_number=None, ptsrc_segmap=None):
+        """Create a seed image containing all of the point sources
+        provided by the source catalog
+
+        Parameters
+        ----------
+        pointSources : astropy.table.Table
+            Table of point sources
+        dir_multi : str
+            Filename for multi-dimensional direct image
+        seg_multi : str
+            Filename for multi-dimensional seg map
+        segment_number : int, optional
+            The number of the mirror segment to make an image for
+        ptsrc_segmap : optional
+            The point source segmentation map to keep adding to
+
+        Returns
+        -------
+        psfimage : numpy.ndarray
+            2D array containing the seed image with point sources
+
+        seg.segmap : numpy.ndarray
+            2D array containing the segmentation map that
+            corresponds to ``psfimage``
+        """
+        dims = np.array(self.nominal_dims)
+
+        # Create the empty image
+        psfimage = np.zeros(self.output_dims)
+
+        if ptsrc_segmap is None:
+            # Create empty segmentation map
+            ptsrc_segmap = segmap.SegMap()
+            ptsrc_segmap.ydim, ptsrc_segmap.xdim = self.output_dims
+            ptsrc_segmap.initialize_map()
+
+        # TM;
+        # Just for header;
+        hdu_tmp = fits.open(seg_multi)
+        header = hdu_tmp[0].header
+
+        # Loop over the entries in the point source list
+        for i, entry in enumerate(pointSources):
+            # Start timer
+            self.timer.start()
+
+            # Find the PSF size to use based on the countrate
+            psf_x_dim = self.find_psf_size(entry['countrate_e/s'])
+
+            # Assume same PSF size in x and y
+            psf_y_dim = psf_x_dim
+
+            scaled_psf, min_x, min_y, wings_added = self.create_psf_stamp(
+                entry['pixelx'], entry['pixely'], psf_x_dim, psf_y_dim,
+                segment_number=segment_number, ignore_detector=True
+            )
+
+            # Skip sources that fall completely off the detector
+            if scaled_psf is None:
+                self.timer.stop()
+                continue
+
+            scaled_psf *= entry['countrate_e/s']
+
+            # PSF may not be centered in array now if part of the array falls
+            # off of the aperture
+            stamp_x_loc = psf_x_dim // 2 - min_x
+            stamp_y_loc = psf_y_dim // 2 - min_y
+            updated_psf_dimensions = scaled_psf.shape
+
+            # If the source subpixel location is beyond 0.5 (i.e. the edge
+            # of the pixel), then we shift the wing->core offset by 1.
+            # We also need to shift the location of the wing array on the
+            # detector by 1
+            if wings_added:
+                x_delta = int(np.modf(entry['pixelx'])[0] > 0.5)
+                y_delta = int(np.modf(entry['pixely'])[0] > 0.5)
+            else:
+                x_delta = 0
+                y_delta = 0
+
+            # Get the coordinates that describe the overlap between the
+            # PSF image and the output aperture
+            xap, yap, xpts, ypts, (i1, i2), (j1, j2), (k1, k2), \
+                (l1, l2) = self.create_psf_stamp_coords(entry['pixelx']+x_delta, entry['pixely']+y_delta,
+                                                        updated_psf_dimensions,
+                                                        stamp_x_loc, stamp_y_loc,
+                                                        coord_sys='aperture')
+
+            # Skip sources that fall completely off the detector
+            if None in [i1, i2, j1, j2, k1, k2, l1, l2]:
+                self.timer.stop()
+                continue
+
+            try:
+                psf_to_add = scaled_psf[l1:l2, k1:k2]
+                psfimage[j1:j2, i1:i2] += psf_to_add
+
+                # TM;
+                hdr_seg = header
+                hdr_seg['EXTNAME'] = '%d'%entry['index']
+                hdr_seg['y0'] = '%d'%j1
+                hdr_seg['x0'] = '%d'%i1
+
+                # Add source to segmentation map
+                ptsrc_segmap.add_object_threshold(psf_to_add, j1, i1, entry['index'], self.segmentation_threshold)
+
+                # TM
+                fits.append(dir_multi, psfimage[j1:j2, i1:i2], hdr_seg)
+                flag = psf_to_add >= self.segmentation_threshold
+                psf_to_add[flag] = entry['index']
+                psf_to_add[~flag] = 0
+                seg = psf_to_add
+                fits.append(seg_multi, seg, hdr_seg)
+
             except IndexError:
                 # In here we catch sources that are off the edge
                 # of the detector. These may not necessarily be caught in
