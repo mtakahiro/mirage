@@ -217,7 +217,7 @@ class WFSSSim():
                 dispersed_objtype_seed = Grism_seed(seed_files, self.crossing_filter,
                                                     dmode, config_path=loc, instrument=self.instrument.upper(),
                                                     extrapolate_SED=self.extrapolate_SED, SED_file=self.SED_file,
-                                                    SBE_save=self.source_stamps_file, dir_multi='test_dir.fits', seg_multi='test.fits')
+                                                    SBE_save=self.source_stamps_file, dir_multi=cat.filename_dir_multi, seg_multi=cat.filename_seg_multi)
                 dispersed_objtype_seed.observation(orders=orders)
                 dispersed_objtype_seed.disperse(orders=orders)
                 # Only include the background in one of the object type seed images

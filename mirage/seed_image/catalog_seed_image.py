@@ -2242,15 +2242,15 @@ class Catalog_seed():
         else:
             signalimage = np.zeros(self.output_dims, dtype=np.float)
             segmentation_map = np.zeros(self.output_dims)
-            print('TM')
+            #TM;
             new_hdul = fits.HDUList()
             new_hdul.append(fits.PrimaryHDU())
-            filename_seg_multi = 'test.fits'
-            new_hdul.writeto(filename_seg_multi, overwrite=True)
+            self.filename_seg_multi = '{}_seed_image_multiseg.fits'.format(self.basename)
+            new_hdul.writeto(self.filename_seg_multi, overwrite=True)
             new_hdul_dir = fits.HDUList()
             new_hdul_dir.append(fits.PrimaryHDU())
-            filename_dir_multi = 'test_dir.fits'
-            new_hdul_dir.writeto(filename_dir_multi, overwrite=True)
+            self.filename_dir_multi = '{}_seed_image_multidir.fits'.format(self.basename)
+            new_hdul_dir.writeto(self.filename_dir_multi, overwrite=True)
             
 
 
@@ -2282,7 +2282,7 @@ class Catalog_seed():
 
                 # TM
                 #psfimage, ptsrc_segmap = self.make_point_source_image(pslist)
-                psfimage, ptsrc_segmap = self.make_point_source_image_multidim(pslist,filename_dir_multi,filename_seg_multi)
+                psfimage, ptsrc_segmap = self.make_point_source_image_multidim(pslist,self.filename_dir_multi,self.filename_seg_multi)
 
                 # If ghost sources are present, then make sure Mirage will retrieve
                 # sources from an extended source catalog
@@ -2365,7 +2365,10 @@ class Catalog_seed():
         # Read in the list of galaxy positions/magnitudes to simulate
         # and create a countrate image of those galaxies.
         if self.runStep['galaxies'] is True:
-            galaxyCRImage, galaxy_segmap, gal_ghosts_cat = self.make_galaxy_image(self.params['simSignals']['galaxyListFile'])
+            # TM
+            #galaxyCRImage, galaxy_segmap, gal_ghosts_cat = self.make_galaxy_image(self.params['simSignals']['galaxyListFile'])
+            galaxyCRImage, galaxy_segmap, gal_ghosts_cat = self.make_galaxy_image_multidim(self.params['simSignals']['galaxyListFile'],
+                                                            self.filename_dir_multi,self.filename_seg_multi)
 
             # If ghost sources are present, then make sure Mirage will retrieve
             # sources from an extended source catalog
@@ -2467,8 +2470,10 @@ class Catalog_seed():
             convolutions = [ele for ele in possible_convolutions if ele is not None]
             convols = [item for ele in convolutions for item in ele]
 
+            # TM;
             # translate the extended source list into an image
-            extimage, ext_segmap = self.make_extended_source_image(extlist, extstamps, convols)
+            #extimage, ext_segmap = self.make_extended_source_image(extlist, extstamps, convols)
+            extimage, ext_segmap = self.make_extended_source_image_multidim(extlist, extstamps, convols, self.filename_dir_multi, self.filename_seg_multi)
 
             # To avoid problems with overlapping sources between source
             # types in observations to be dispersed, make the point
@@ -3182,6 +3187,7 @@ class Catalog_seed():
                 hdr_seg['EXTNAME'] = '%d'%entry['index']
                 hdr_seg['y0'] = '%d'%j1
                 hdr_seg['x0'] = '%d'%i1
+                hdr_seg['type'] = 'ptsrc'
 
                 # Add source to segmentation map
                 ptsrc_segmap.add_object_threshold(psf_to_add, j1, i1, entry['index'], self.segmentation_threshold)
@@ -4482,6 +4488,187 @@ class Catalog_seed():
 
         return galimage, segmentation.segmap, ghost_sources_from_galaxies
 
+    def make_galaxy_image_multidim(self, file, dir_multi, seg_multi):
+        """Using the entries in the ``simSignals:galaxyList`` file, create a countrate image
+        of model galaxies (2D sersic profiles)
+
+        Parameters
+        ----------
+        catalog_file : str
+            Name of ascii catalog file containing galaxy sources
+
+        Returns
+        -------
+        galimage : numpy.ndarray
+            2D array containing countrate image of galaxy sources
+
+        segmentation.segmap : numpy.ndarray
+            Segmentation map corresponding to ``galimage``
+
+        ghost_sources_from_galaxies : str
+            Name of an extended source catalog file written out and
+            containing ghost sources due to the galaxies in the galaxy
+            catalog. Currently only done for NIRISS
+        """
+        # Read in the list of galaxies (positions and magnitides)
+        glist, pixflag, radflag, magsys = self.readGalaxyFile(file)
+        if pixflag:
+            self.logger.info("Galaxy list input positions assumed to be in units of pixels.")
+        else:
+            self.logger.info("Galaxy list input positions assumed to be in units of RA and Dec.")
+
+        if radflag:
+            self.logger.info("Galaxy list input radii assumed to be in units of pixels.")
+        else:
+            self.logger.info("Galaxy list input radii assumed to be in units of arcsec.")
+
+        # Extract and save only the entries which will land (fully or partially) on the
+        # aperture of the output
+        galaxylist, ghost_sources_from_galaxies = self.filterGalaxyList(glist, pixflag, radflag, magsys, file)
+
+        # galaxylist is a table with columns:
+        # 'pixelx', 'pixely', 'RA', 'Dec', 'RA_degrees', 'Dec_degrees', 'radius', 'ellipticity',
+        # 'pos_angle', 'sersic_index', 'magnitude', 'countrate_e/s', 'counts_per_frame_e'
+
+        # final output image
+        yd, xd = self.output_dims
+
+        # create the final galaxy countrate image
+        galimage = np.zeros((yd, xd))
+
+        # Create corresponding segmentation map
+        segmentation = segmap.SegMap()
+        segmentation.xdim = xd
+        segmentation.ydim = yd
+        segmentation.initialize_map()
+
+        # Create table of point source countrate versus psf size
+        if self.add_psf_wings is True:
+            self.translate_psf_table(magsys)
+
+        # TM;
+        # Just for header;
+        hdu_tmp = fits.open(seg_multi)
+        header = hdu_tmp[0].header
+
+        for entry_index, entry in enumerate(galaxylist):
+            # Start timer
+            self.timer.start()
+
+            # Get position angle in the correct units. Inputs for each
+            # source are degrees east of north. So we need to find the
+            # angle between north and V3, and then the angle between
+            # V3 and the y-axis on the detector. The former can be found
+            # using rotations.posang(attitude_matrix, v2, v3). The latter
+            # is just V3SciYAngle in the SIAF (I think???)
+            # v3SciYAng is measured in degrees, from V3 towards the Y axis,
+            # measured from V3 towards V2.
+            xposang = self.calc_x_position_angle(entry['V2'], entry['V3'], entry['pos_angle'])
+
+            sub_x = 0.
+            sub_y = 0.
+
+            # First create the galaxy
+            stamp = self.create_galaxy(entry['radius'], entry['ellipticity'], entry['sersic_index'],
+                                       xposang*np.pi/180., entry['countrate_e/s'], sub_x, sub_y)
+
+            # If the stamp image is smaller than the PSF in either
+            # dimension, embed the stamp in an array that matches
+            # the psf size. This is so the upcoming convolution will
+            # produce an output that includes the wings of the PSF
+            galdims = stamp.shape
+
+            # Using the PSF "core" normalized to 1 will keep more light near
+            # the core of the galaxy, compared to the more rigorous
+            # approach that uses the full convolution including the wings.
+            # Whether this is a problem or not will depend on the relative
+            # sizes of the photometry aperture versus the extended source.
+            psf_dimensions = np.array(self.psf_library.data.shape[-2:])
+            psf_shape = np.array((psf_dimensions / self.psf_library_oversamp) -
+                                 self.params['simSignals']['gridded_psf_library_row_padding']).astype(np.int)
+
+            if ((galdims[0] < psf_shape[0]) or (galdims[1] < psf_shape[1])):
+                stamp = self.enlarge_stamp(stamp, psf_shape)
+                galdims = stamp.shape
+
+            # Get the PSF which will be convolved with the galaxy profile
+            # The PSF should be centered in the pixel containing the galaxy center
+            psf_image, min_x, min_y, wings_added = self.create_psf_stamp(entry['pixelx'], entry['pixely'], psf_shape[1], psf_shape[0],
+                                                                         ignore_detector=True)
+
+            # Skip sources that fall completely off the detector
+            if psf_image is None:
+                self.timer.stop()
+                continue
+
+            # Normalize the signal in the PSF stamp so that the final galaxy
+            # signal will match the requested value
+            psf_image = psf_image / np.sum(psf_image)
+
+            # If the source subpixel location is beyond 0.5 (i.e. the edge
+            # of the pixel), then we shift the wing->core offset by 1.
+            # We also need to shift the location of the wing array on the
+            # detector by 1
+            if wings_added:
+                x_delta = int(np.modf(entry['pixelx'])[0] > 0.5)
+                y_delta = int(np.modf(entry['pixely'])[0] > 0.5)
+            else:
+                x_delta = 0
+                y_delta = 0
+
+            # Calculate the coordinates describing the overlap between
+            # the PSF image and the galaxy image
+            xap, yap, xpts, ypts, (i1, i2), (j1, j2), (k1, k2), \
+                (l1, l2) = self.create_psf_stamp_coords(entry['pixelx']+x_delta, entry['pixely']+y_delta,
+                                                        galdims, galdims[1] // 2, galdims[0] // 2,
+                                                        coord_sys='aperture')
+
+            # Make sure the stamp is at least partially on the detector
+            if i1 is not None and i2 is not None and j1 is not None and j2 is not None:
+                # Convolve the galaxy image with the PSF image
+                stamp = s1.fftconvolve(stamp, psf_image, mode='same')
+
+                # Now add the stamp to the main image
+                if ((j2 > j1) and (i2 > i1) and (l2 > l1) and (k2 > k1) and (j1 < yd) and (i1 < xd)):
+                    stamp_to_add = stamp[l1:l2, k1:k2]
+                    galimage[j1:j2, i1:i2] += stamp_to_add
+                    # Add source to segmentation map
+                    segmentation.add_object_threshold(stamp_to_add, j1, i1, entry['index'], self.segmentation_threshold)
+
+                    # TM;
+                    hdr_seg = header
+                    hdr_seg['EXTNAME'] = '%d'%entry['index']
+                    hdr_seg['y0'] = '%d'%j1
+                    hdr_seg['x0'] = '%d'%i1
+                    hdr_seg['type'] = 'galaxy'
+
+                    fits.append(dir_multi, stamp_to_add, hdr_seg)
+                    flag = stamp_to_add >= self.segmentation_threshold
+                    seg_to_add = stamp_to_add.copy()
+                    seg_to_add[flag] = entry['index']
+                    seg_to_add[~flag] = 0
+                    fits.append(seg_multi, seg_to_add, hdr_seg)
+
+                else:
+                    pass
+                    # print("Source located entirely outside the field of view. Skipping.")
+            else:
+                pass
+
+            self.timer.stop(name='gal_{}'.format(str(entry_index).zfill(6)))
+
+            # If there are more than 30 galaxies, provide an estimate of processing time
+            if len(galaxylist) > 100:
+                if ((entry_index == 20) or ((entry_index > 0) and (np.mod(entry_index, 100) == 0))):
+                    time_per_galaxy = self.timer.sum(key_str='gal_') / (entry_index+1)
+                    estimated_remaining_time = time_per_galaxy * (len(galaxylist) - (entry_index+1)) * u.second
+                    time_remaining = np.around(estimated_remaining_time.to(u.minute).value, decimals=2)
+                    finish_time = datetime.datetime.now() + datetime.timedelta(minutes=time_remaining)
+                    self.logger.info(('Working on galaxy #{}. Estimated time remaining to add all galaxies to the stamp image: {} minutes. '
+                                      'Projected finish time: {}'.format(entry_index, time_remaining, finish_time)))
+
+        return galimage, segmentation.segmap, ghost_sources_from_galaxies
+
     def calc_x_position_angle(self, v2_value, v3_value, position_angle):
         """Calcuate the position angle of the source relative to the x
         axis of the detector given the source's v2, v3 location and the
@@ -5029,6 +5216,124 @@ class Catalog_seed():
                 segmentation.add_object_threshold(stamp_to_add, j1, i1, entry['index'],
                                                   self.segmentation_threshold)
                 self.n_extend += 1
+
+        if self.n_extend == 0:
+            self.logger.info("No extended sources present within the aperture.")
+        else:
+            self.logger.info('Number of extended sources present within the aperture: {}'.format(self.n_extend))
+        return extimage, segmentation.segmap
+
+    def make_extended_source_image_multidim(self, extSources, extStamps, extConvolutions, dir_multi, seg_multi):
+        # Create the empty image
+        yd, xd = self.output_dims
+        extimage = np.zeros(self.output_dims)
+
+        # Create corresponding segmentation map
+        segmentation = segmap.SegMap()
+        segmentation.xdim = xd
+        segmentation.ydim = yd
+        segmentation.initialize_map()
+
+        # TM;
+        # Just for header;
+        hdu_tmp = fits.open(seg_multi)
+        header = hdu_tmp[0].header
+
+        # Loop over the entries in the source list
+        for entry, stamp, convolution in zip(extSources, extStamps, extConvolutions):
+            stamp_dims = stamp.shape
+
+            stamp *= entry['countrate_e/s']
+
+            # If the stamp needs to be convolved with the NIRCam PSF,
+            # create the correct PSF  here and read it in
+            if convolution:
+                # If the stamp image is smaller than the PSF in either
+                # dimension, embed the stamp in an array that matches
+                # the psf size. This is so the upcoming convolution will
+                # produce an output that includes the wings of the PSF
+                psf_dimensions = np.array(self.psf_library.data.shape[-2:])
+                psf_shape = np.array((psf_dimensions / self.psf_library_oversamp) -
+                                     self.params['simSignals']['gridded_psf_library_row_padding']).astype(np.int)
+                if ((stamp_dims[0] < psf_shape[0]) or (stamp_dims[1] < psf_shape[1])):
+                    stamp = self.enlarge_stamp(stamp, psf_shape)
+                    stamp_dims = stamp.shape
+
+                # Create the PSF
+                # Using the PSF "core" normalized to 1 will keep more light near
+                # the core of the galaxy, compared to the more rigorous
+                # approach that uses the full convolution including the wings.
+                # Whether this is a problem or not will depend on the relative
+                # sizes of the photometry aperture versus the extended source.
+                psf_image, min_x, min_y, wings_added = self.create_psf_stamp(entry['pixelx'], entry['pixely'],
+                                                                             psf_shape[1], psf_shape[0], ignore_detector=True)
+
+                # Skip sources that fall completely off the detector
+                if psf_image is None:
+                    continue
+
+                # Normalize the PSF so that the final signal in the extended
+                # source mathces the requested signal
+                psf_image = psf_image / np.sum(psf_image)
+
+                # If the source subpixel location is beyond 0.5 (i.e. the edge
+                # of the pixel), then we shift the wing->core offset by 1.
+                # We also need to shift the location of the wing array on the
+                # detector by 1
+                if wings_added:
+                    x_delta = int(np.modf(entry['pixelx'])[0] > 0.5)
+                    y_delta = int(np.modf(entry['pixely'])[0] > 0.5)
+                else:
+                    x_delta = 0
+                    y_delta = 0
+
+                # Calculate the coordinates describing the overlap
+                # between the extended image and the PSF image
+                xap, yap, xpts, ypts, (i1, i2), (j1, j2), (k1, k2), \
+                    (l1, l2) = self.create_psf_stamp_coords(entry['pixelx']+x_delta, entry['pixely']+y_delta,
+                                                            stamp_dims, stamp_dims[1] // 2, stamp_dims[0] // 2,
+                                                            coord_sys='aperture')
+
+                if None in [i1, i2, j1, j2, k1, k2, l1, l2]:
+                    continue
+
+                # Convolve the extended image with the stamp image
+                stamp = s1.fftconvolve(stamp, psf_image, mode='same')
+            else:
+                # If no PSF convolution is to be done, find the
+                # coordinates describing the overlap between the
+                # original stamp image and the aperture
+                xap, yap, xpts, ypts, (i1, i2), (j1, j2), (k1, k2), \
+                    (l1, l2) = self.create_psf_stamp_coords(entry['pixelx'], entry['pixely'],
+                                                            stamp_dims, stamp_dims[1] // 2, stamp_dims[0] // 2,
+                                                            coord_sys='aperture')
+
+            # Make sure the stamp is at least partially on the detector
+            if i1 is not None and i2 is not None and j1 is not None and j2 is not None:
+
+                # Now add the stamp to the main image
+                if ((j2 > j1) and (i2 > i1) and (l2 > l1) and (k2 > k1) and (j1 < yd) and (i1 < xd)):
+                    stamp_to_add = stamp[l1:l2, k1:k2]
+                    extimage[j1:j2, i1:i2] += stamp_to_add
+
+                # Add source to segmentation map
+                segmentation.add_object_threshold(stamp_to_add, j1, i1, entry['index'],
+                                                  self.segmentation_threshold)
+                self.n_extend += 1
+
+                # TM;
+                hdr_seg = header
+                hdr_seg['EXTNAME'] = '%d'%entry['index']
+                hdr_seg['y0'] = '%d'%j1
+                hdr_seg['x0'] = '%d'%i1
+                hdr_seg['type'] = 'extsrc'
+
+                fits.append(dir_multi, stamp_to_add, hdr_seg)
+                flag = stamp_to_add >= self.segmentation_threshold
+                seg_to_add = stamp_to_add.copy()
+                seg_to_add[flag] = entry['index']
+                seg_to_add[~flag] = 0
+                fits.append(seg_multi, seg_to_add, hdr_seg)
 
         if self.n_extend == 0:
             self.logger.info("No extended sources present within the aperture.")
