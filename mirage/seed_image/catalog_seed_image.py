@@ -2243,14 +2243,15 @@ class Catalog_seed():
             signalimage = np.zeros(self.output_dims, dtype=np.float)
             segmentation_map = np.zeros(self.output_dims)
             #TM;
-            new_hdul = fits.HDUList()
-            new_hdul.append(fits.PrimaryHDU())
-            self.filename_seg_multi = '{}_seed_image_multiseg.fits'.format(self.basename)
-            new_hdul.writeto(self.filename_seg_multi, overwrite=True)
-            new_hdul_dir = fits.HDUList()
-            new_hdul_dir.append(fits.PrimaryHDU())
-            self.filename_dir_multi = '{}_seed_image_multidir.fits'.format(self.basename)
-            new_hdul_dir.writeto(self.filename_dir_multi, overwrite=True)
+            self.filename_seg_multi = '{}_seed_image_multiseg.asdf'.format(self.basename)
+            if os.path.exists(self.filename_seg_multi):
+                os.system('rm %s'%self.filename_seg_multi)
+            #self.filename_dir_multi = '{}_seed_image_multidir.fits'.format(self.basename)
+            #new_hdul = fits.HDUList()
+            #new_hdul.append(fits.PrimaryHDU())
+            #new_hdul_dir = fits.HDUList()
+            #new_hdul_dir.append(fits.PrimaryHDU())
+            #new_hdul_dir.writeto(self.filename_dir_multi, overwrite=True)
             
 
 
@@ -2282,7 +2283,7 @@ class Catalog_seed():
 
                 # TM
                 #psfimage, ptsrc_segmap = self.make_point_source_image(pslist)
-                psfimage, ptsrc_segmap = self.make_point_source_image_multidim(pslist,self.filename_dir_multi,self.filename_seg_multi)
+                psfimage, ptsrc_segmap = self.make_point_source_image_multidim(pslist,self.filename_seg_multi)
 
                 # If ghost sources are present, then make sure Mirage will retrieve
                 # sources from an extended source catalog
@@ -2368,7 +2369,7 @@ class Catalog_seed():
             # TM
             #galaxyCRImage, galaxy_segmap, gal_ghosts_cat = self.make_galaxy_image(self.params['simSignals']['galaxyListFile'])
             galaxyCRImage, galaxy_segmap, gal_ghosts_cat = self.make_galaxy_image_multidim(self.params['simSignals']['galaxyListFile'],
-                                                            self.filename_dir_multi,self.filename_seg_multi)
+                                                            self.filename_seg_multi)
 
             # If ghost sources are present, then make sure Mirage will retrieve
             # sources from an extended source catalog
@@ -2473,7 +2474,7 @@ class Catalog_seed():
             # TM;
             # translate the extended source list into an image
             #extimage, ext_segmap = self.make_extended_source_image(extlist, extstamps, convols)
-            extimage, ext_segmap = self.make_extended_source_image_multidim(extlist, extstamps, convols, self.filename_dir_multi, self.filename_seg_multi)
+            extimage, ext_segmap = self.make_extended_source_image_multidim(extlist, extstamps, convols, self.filename_seg_multi)
 
             # To avoid problems with overlapping sources between source
             # types in observations to be dispersed, make the point
@@ -3083,7 +3084,7 @@ class Catalog_seed():
 
         return psfimage, ptsrc_segmap
 
-    def make_point_source_image_multidim(self, pointSources, dir_multi, seg_multi, segment_number=None, ptsrc_segmap=None):
+    def make_point_source_image_multidim(self, pointSources, seg_multi, segment_number=None, ptsrc_segmap=None):
         """Create a seed image containing all of the point sources
         provided by the source catalog
 
@@ -3091,8 +3092,6 @@ class Catalog_seed():
         ----------
         pointSources : astropy.table.Table
             Table of point sources
-        dir_multi : str
-            Filename for multi-dimensional direct image
         seg_multi : str
             Filename for multi-dimensional seg map
         segment_number : int, optional
@@ -3122,8 +3121,18 @@ class Catalog_seed():
 
         # TM;
         # Just for header;
-        hdu_tmp = fits.open(seg_multi)
-        header = hdu_tmp[0].header
+        if os.path.exists(self.filename_seg_multi):
+            tree = asdf.open(self.filename_seg_multi)
+            tree_dir = tree['dir']
+            tree_seg = tree['seg']
+            tree_coord = tree['coord']
+        else:
+            tree_dir = {}
+            tree_seg = {}
+            tree_coord = {}
+
+        import timeit
+        start = timeit.default_timer()        
 
         # Loop over the entries in the point source list
         for i, entry in enumerate(pointSources):
@@ -3182,24 +3191,25 @@ class Catalog_seed():
                 psf_to_add = scaled_psf[l1:l2, k1:k2]
                 psfimage[j1:j2, i1:i2] += psf_to_add
 
-                # TM;
-                hdr_seg = header
-                hdr_seg['EXTNAME'] = '%d'%entry['index']
-                hdr_seg['y0'] = '%d'%j1
-                hdr_seg['x0'] = '%d'%i1
-                hdr_seg['type'] = 'ptsrc'
-
                 # Add source to segmentation map
                 ptsrc_segmap.add_object_threshold(psf_to_add, j1, i1, entry['index'], self.segmentation_threshold)
 
-                # TM
-                fits.append(dir_multi, psfimage[j1:j2, i1:i2], hdr_seg)
+                # TM;
+                #hdr_seg = header
+                #hdr_seg['EXTNAME'] = '%d'%entry['index']
+                #hdr_seg['y0'] = '%d'%j1
+                #hdr_seg['x0'] = '%d'%i1
+                #hdr_seg['type'] = 'ptsrc'
+                #fits.append(dir_multi, psfimage[j1:j2, i1:i2], hdr_seg)
+                #fits.append(seg_multi, seg, hdr_seg)
                 flag = psf_to_add >= self.segmentation_threshold
                 psf_to_add[flag] = entry['index']
                 psf_to_add[~flag] = 0
                 seg = psf_to_add
-                fits.append(seg_multi, seg, hdr_seg)
-
+                tree_dir.update({'%d'%entry['index']: psfimage[j1:j2, i1:i2]})
+                tree_seg.update({'%d'%entry['index']: seg})
+                tree_coord.update({'%d'%entry['index']: [j1,i1]})
+                
             except IndexError:
                 # In here we catch sources that are off the edge
                 # of the detector. These may not necessarily be caught in
@@ -3220,6 +3230,14 @@ class Catalog_seed():
                     finish_time = datetime.datetime.now() + datetime.timedelta(minutes=time_remaining)
                     self.logger.info(('Working on source #{}. Estimated time remaining to add all point sources to the stamp image: {} minutes. '
                                       'Projected finish time: {}'.format(i, time_remaining, finish_time)))
+
+        # TM;
+        tree = {}
+        tree.update({'dir' : tree_dir})
+        tree.update({'seg' : tree_seg})
+        tree.update({'coord' : tree_coord})
+        af = asdf.AsdfFile(tree)
+        af.write_to(seg_multi, all_array_compression='zlib')
 
         return psfimage, ptsrc_segmap
 
@@ -4488,7 +4506,7 @@ class Catalog_seed():
 
         return galimage, segmentation.segmap, ghost_sources_from_galaxies
 
-    def make_galaxy_image_multidim(self, file, dir_multi, seg_multi):
+    def make_galaxy_image_multidim(self, file, seg_multi):
         """Using the entries in the ``simSignals:galaxyList`` file, create a countrate image
         of model galaxies (2D sersic profiles)
 
@@ -4548,8 +4566,15 @@ class Catalog_seed():
 
         # TM;
         # Just for header;
-        hdu_tmp = fits.open(seg_multi)
-        header = hdu_tmp[0].header
+        if os.path.exists(self.filename_seg_multi):
+            tree = asdf.open(self.filename_seg_multi)
+            tree_dir = tree['dir']
+            tree_seg = tree['seg']
+            tree_coord = tree['coord']
+        else:
+            tree_dir = {}
+            tree_seg = {}
+            tree_coord = {}
 
         for entry_index, entry in enumerate(galaxylist):
             # Start timer
@@ -4636,18 +4661,23 @@ class Catalog_seed():
                     segmentation.add_object_threshold(stamp_to_add, j1, i1, entry['index'], self.segmentation_threshold)
 
                     # TM;
-                    hdr_seg = header
-                    hdr_seg['EXTNAME'] = '%d'%entry['index']
-                    hdr_seg['y0'] = '%d'%j1
-                    hdr_seg['x0'] = '%d'%i1
-                    hdr_seg['type'] = 'galaxy'
-
-                    fits.append(dir_multi, stamp_to_add, hdr_seg)
+                    #hdr_seg = header
+                    #hdr_seg['EXTNAME'] = '%d'%entry['index']
+                    #hdr_seg['y0'] = '%d'%j1
+                    #hdr_seg['x0'] = '%d'%i1
+                    #hdr_seg['type'] = 'galaxy'
+                    #fits.append(dir_multi, stamp_to_add, hdr_seg)
+                    #fits.append(seg_multi, seg_to_add, hdr_seg)
                     flag = stamp_to_add >= self.segmentation_threshold
                     seg_to_add = stamp_to_add.copy()
                     seg_to_add[flag] = entry['index']
                     seg_to_add[~flag] = 0
-                    fits.append(seg_multi, seg_to_add, hdr_seg)
+                    
+                    flag = stamp_to_add >= self.segmentation_threshold
+                    tree_dir.update({'%d'%entry['index']: stamp_to_add})
+                    tree_seg.update({'%d'%entry['index']: seg_to_add})
+                    tree_coord.update({'%d'%entry['index']: [j1,i1]})
+
 
                 else:
                     pass
@@ -4666,6 +4696,14 @@ class Catalog_seed():
                     finish_time = datetime.datetime.now() + datetime.timedelta(minutes=time_remaining)
                     self.logger.info(('Working on galaxy #{}. Estimated time remaining to add all galaxies to the stamp image: {} minutes. '
                                       'Projected finish time: {}'.format(entry_index, time_remaining, finish_time)))
+
+        # TM;
+        tree = {}
+        tree.update({'dir' : tree_dir})
+        tree.update({'seg' : tree_seg})
+        tree.update({'coord' : tree_coord})
+        af = asdf.AsdfFile(tree)
+        af.write_to(seg_multi, all_array_compression='zlib')
 
         return galimage, segmentation.segmap, ghost_sources_from_galaxies
 
@@ -5223,7 +5261,7 @@ class Catalog_seed():
             self.logger.info('Number of extended sources present within the aperture: {}'.format(self.n_extend))
         return extimage, segmentation.segmap
 
-    def make_extended_source_image_multidim(self, extSources, extStamps, extConvolutions, dir_multi, seg_multi):
+    def make_extended_source_image_multidim(self, extSources, extStamps, extConvolutions, seg_multi):
         # Create the empty image
         yd, xd = self.output_dims
         extimage = np.zeros(self.output_dims)
@@ -5236,8 +5274,15 @@ class Catalog_seed():
 
         # TM;
         # Just for header;
-        hdu_tmp = fits.open(seg_multi)
-        header = hdu_tmp[0].header
+        if os.path.exists(self.filename_seg_multi):
+            tree = asdf.open(self.filename_seg_multi)
+            tree_dir = tree['dir']
+            tree_seg = tree['seg']
+            tree_coord = tree['coord']
+        else:
+            tree_dir = {}
+            tree_seg = {}
+            tree_coord = {}
 
         # Loop over the entries in the source list
         for entry, stamp, convolution in zip(extSources, extStamps, extConvolutions):
@@ -5322,23 +5367,29 @@ class Catalog_seed():
                 self.n_extend += 1
 
                 # TM;
-                hdr_seg = header
-                hdr_seg['EXTNAME'] = '%d'%entry['index']
-                hdr_seg['y0'] = '%d'%j1
-                hdr_seg['x0'] = '%d'%i1
-                hdr_seg['type'] = 'extsrc'
-
-                fits.append(dir_multi, stamp_to_add, hdr_seg)
                 flag = stamp_to_add >= self.segmentation_threshold
                 seg_to_add = stamp_to_add.copy()
                 seg_to_add[flag] = entry['index']
                 seg_to_add[~flag] = 0
-                fits.append(seg_multi, seg_to_add, hdr_seg)
+                
+                flag = stamp_to_add >= self.segmentation_threshold
+                tree_dir.update({'%d'%entry['index']: stamp_to_add})
+                tree_seg.update({'%d'%entry['index']: seg_to_add})
+                tree_coord.update({'%d'%entry['index']: [j1,i1]})
 
         if self.n_extend == 0:
             self.logger.info("No extended sources present within the aperture.")
         else:
             self.logger.info('Number of extended sources present within the aperture: {}'.format(self.n_extend))
+
+        # TM;
+        tree = {}
+        tree.update({'dir' : tree_dir})
+        tree.update({'seg' : tree_seg})
+        tree.update({'coord' : tree_coord})
+        af = asdf.AsdfFile(tree)
+        af.write_to(seg_multi, all_array_compression='zlib')
+
         return extimage, segmentation.segmap
 
     def enlarge_stamp(self, image, dims):

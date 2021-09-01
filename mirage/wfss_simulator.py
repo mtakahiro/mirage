@@ -208,8 +208,7 @@ class WFSSSim():
         # Call the disperser separately for each type of object: point sources
         # galaxies, extended objects
         disp_seed = np.zeros((cat.ffsize, cat.ffsize))
-        background_done = True #False
-        print('hoge')
+        background_done =False
 
         for seed_files in [ptsrc_seeds, galaxy_seeds, extended_seeds]:
             if seed_files[0] is not None:
@@ -217,7 +216,7 @@ class WFSSSim():
                 dispersed_objtype_seed = Grism_seed(seed_files, self.crossing_filter,
                                                     dmode, config_path=loc, instrument=self.instrument.upper(),
                                                     extrapolate_SED=self.extrapolate_SED, SED_file=self.SED_file,
-                                                    SBE_save=self.source_stamps_file, dir_multi=cat.filename_dir_multi, seg_multi=cat.filename_seg_multi)
+                                                    SBE_save=self.source_stamps_file, seg_multi=cat.filename_seg_multi)
                 dispersed_objtype_seed.observation(orders=orders)
                 dispersed_objtype_seed.disperse(orders=orders)
                 # Only include the background in one of the object type seed images
