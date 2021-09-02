@@ -2245,14 +2245,7 @@ class Catalog_seed():
             #TM;
             self.filename_seg_multi = '{}_seed_image_multiseg.asdf'.format(self.basename)
             if os.path.exists(self.filename_seg_multi):
-                os.system('rm %s'%self.filename_seg_multi)
-            #self.filename_dir_multi = '{}_seed_image_multidir.fits'.format(self.basename)
-            #new_hdul = fits.HDUList()
-            #new_hdul.append(fits.PrimaryHDU())
-            #new_hdul_dir = fits.HDUList()
-            #new_hdul_dir.append(fits.PrimaryHDU())
-            #new_hdul_dir.writeto(self.filename_dir_multi, overwrite=True)
-            
+                os.system('rm %s'%self.filename_seg_multi)            
 
 
         instrument_name = self.params['Inst']['instrument'].lower()
