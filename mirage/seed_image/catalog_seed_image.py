@@ -3199,7 +3199,7 @@ class Catalog_seed():
                 psf_to_add[flag] = entry['index']
                 psf_to_add[~flag] = 0
                 seg = psf_to_add
-                tree_dir.update({'%d'%entry['index']: psfimage[j1:j2, i1:i2]})
+                tree_dir.update({'%d'%entry['index']: psf_to_add}) #psfimage[j1:j2, i1:i2]})
                 tree_seg.update({'%d'%entry['index']: seg})
                 tree_coord.update({'%d'%entry['index']: [j1,i1]})
                 
