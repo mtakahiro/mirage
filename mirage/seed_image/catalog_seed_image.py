@@ -3196,11 +3196,11 @@ class Catalog_seed():
                 #fits.append(dir_multi, psfimage[j1:j2, i1:i2], hdr_seg)
                 #fits.append(seg_multi, seg, hdr_seg)
                 flag = psf_to_add >= self.segmentation_threshold
-                psf_to_add[flag] = entry['index']
-                psf_to_add[~flag] = 0
-                seg = psf_to_add
-                tree_dir.update({'%d'%entry['index']: psf_to_add}) #psfimage[j1:j2, i1:i2]})
-                tree_seg.update({'%d'%entry['index']: seg})
+                seg_to_add = psf_to_add.copy()
+                seg_to_add[flag] = entry['index']
+                seg_to_add[~flag] = 0
+                tree_dir.update({'%d'%entry['index']: psf_to_add}) 
+                tree_seg.update({'%d'%entry['index']: seg_to_add})
                 tree_coord.update({'%d'%entry['index']: [j1,i1]})
                 
             except IndexError:
