@@ -2239,6 +2239,10 @@ class Catalog_seed():
         if (self.params['Output']['grism_source_image'] == False) and (not self.params['Inst']['mode'] in ["pom", "wfss"]):
             signalimage = np.zeros(self.nominal_dims)
             segmentation_map = np.zeros(self.nominal_dims)
+            #TM;
+            self.filename_seg_multi = '{}_seed_image_multiseg.asdf'.format(self.basename)
+            if os.path.exists(self.filename_seg_multi):
+                os.system('rm %s'%self.filename_seg_multi)            
         else:
             signalimage = np.zeros(self.output_dims, dtype=np.float)
             segmentation_map = np.zeros(self.output_dims)
